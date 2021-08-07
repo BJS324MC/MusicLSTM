@@ -26,12 +26,13 @@ class Attention extends tf.layers.Layer {
 }
 tf.serialization.registerClass(Attention);
 
-function createModel(inputLength = 20, outputLength = 40) {
+function createModel(inputLength = 100, outputLength = 40) {
   const model = tf.sequential();
   model.add(tf.layers.bidirectional({ layer: tf.layers.lstm({ units: inputLength, returnSequences: true }), inputShape: [inputLength, 1] }));
   model.add(new Attention());
   model.add(tf.layers.lstm({ units: inputLength }));
   model.add(tf.layers.dense({ units: Math.floor(inputLength / 2) }));
+  model.add(tf.layers.dropout({rate:0.3}));
   model.add(tf.layers.dense({ units: outputLength, activation: "softmax" }));
   return model;
 }
@@ -58,13 +59,19 @@ async function trainModel(model, inputs, labels) {
 const midi = new Midi();
 async function loadData() {
   return await Promise.all([
-    Midi.fromUrl("http://localhost:7700/data/0.midi"),
-    Midi.fromUrl("http://localhost:7700/data/1.midi"),
-    Midi.fromUrl("http://localhost:7700/data/2.midi"),
-    Midi.fromUrl("http://localhost:7700/data/3.midi")
+    //Midi.fromUrl("http://localhost:7700/data/0.midi"),
+    //Midi.fromUrl("http://localhost:7700/data/1.midi"),
+    //Midi.fromUrl("http://localhost:7700/data/2.midi"),
+    //Midi.fromUrl("http://localhost:7700/data/3.midi"),
+    Midi.fromUrl("http://localhost:7700/data/4.mid")
   ]);
 }
 
+function playRawData(data){
+  data.tracks[0].notes.forEach(y => {
+    sampler.triggerAttackRelease(y.name,y.duration,y.time);
+  })
+}
 function cleanData(data) {
   let d = Array.from({ length: data.length }, () => []),
     timelines = Array.from({ length: data.length }, () => ({}));
@@ -86,8 +93,45 @@ function cleanData(data) {
       n = a;
     })
   });
-  console.log(d)
+  console.log(JSON.stringify(data))
   return d;
+}
+
+function createTable(data) {
+  let table = {},
+    i = 0;
+  data.forEach(a => a.forEach(b => (b in table) ? 0 : table[b] = i++));
+  Object.defineProperty(table, "length", {
+    value: i
+  });
+  return table
+}
+
+const encodeData = (data, table) => data.map(a=>a.map(b => table[b]/table.length)),
+      oneHot = (index, length) => {
+        let arr=Array.from({length:length},()=>0);
+        arr[index]=1;
+        return arr;
+      },
+      shuffleCombo = (a,b) => {
+        let permu=Array.from({length:a.length},(a,i)=>i);
+        for(let i=permu.length-1;i>=0;i--){
+          let j=Math.floor(Math.random()*permu.length);
+          [permu[i],permu[j]]=[permu[j],permu[i]];
+        }
+        return [a.map((e,i)=>a[permu[i]]),b.map((e,i)=>b[permu[i]])]
+      }
+function trainingData(data,table,sequenceLength=2){
+  let inputs=[],
+      outputs=[];
+  data=encodeData(data,table);
+  for(let a in data)for(let i=0;i<data[a].length-sequenceLength;i++){
+    let p=i+sequenceLength,
+        d=data[a];
+    inputs.push(d.slice(i,p))
+    outputs.push(oneHot(d[p],table.length));
+  }
+  return shuffleCombo(inputs,outputs);
 }
 
 function playData(data) {
@@ -100,40 +144,38 @@ function playData(data) {
     sampler.triggerAttackRelease(a.slice(1), time - stack[a.slice(1)], now + stack[a.slice(1)]));
 }
 
-function createTable(data) {
-  let table = {},
-    i = 0;
-  data.forEach(a => a.forEach(b => (b in table) ? 0 : table[b] = i++));
-  Object.defineProperty(table, "length", {
-    value: i
-  });
-  return table
-}
-const encodeData = (data, table) => data.map(a => table[a]);
+/* Finishing the network */
+
 let net, p, urls = {},
   P = ["C", "D", "E", "F", "G", "A", "B"],
   V = ["C", "E", "G", "A"],
   data = loadData();
-data.then(a => data = cleanData(a));
+data.then(a => data = a);
 
 for (let i = 0; i < 7; i++) P.forEach(a => {
   urls[a + i] = a + i + ".wav";
   urls[a + "#" + i] = a + "s" + i + ".wav"
 });
+
 const sampler = new Tone.Sampler({
   urls: urls,
   baseUrl: "http://localhost:7700/instruments/piano/"
 }).toDestination();
+
 Tone.loaded().then(() => {
-  console.log(encodeData(data[0],createTable(data)).length);
-  const loop = new Tone.Loop(()=>playData(data[0]),"6m").start(0);
-  Tone.Transport.start();
+  playRawData(data[0]);
+  //const loop = new Tone.Loop(()=>playData(data[1]),"3m").start(0);
+  //Tone.Transport.start();
+  //playData(data[0])
 });
 /*addEventListener("load", () => {
   lstm().then(model => {
-    tfvis.show.modelSummary({ name: 'Model Summary' }, model);net=model;
+    tfvis.show.modelSummary({ name: 'Model Summary' }, model);
     //p=model.save("http://localhost:7700/models");
     //p.then(a=>p=a);
-    //trainModel(model).then(a=>{net=a;await model.save("downloads://my-model-1");})
+    /*let table=createTable(data),
+        trainingSet=trainingData(data,table,50);
+    trainModel(model,trainingSet[0],trainingSet[1])
+    .then(a=>{net=a;await model.save("http://localhost:7700/models/model");})
   });
 });*/
